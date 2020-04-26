@@ -11,7 +11,7 @@ import logging
 import time
 from typing import List, Union
 
-__version__ = '1.0.0'
+__version__ = '1.0.1'
 __author__ = 'David Nugent <davidn@uniquode.io>'
 
 
@@ -77,25 +77,26 @@ def monitor(logger: logging.Logger, host: str, interval: float, errors: int, tim
         mark = time.time()
         endat = mark + interval
         timeleft = interval
-        while mark < endat:
-            count += 1
-            resp = sr1(icmp, timeout=timeleft, verbose=False)
-            logger.debug(f'icmp {host} timeout {timeleft} response: {resp}')
-            if state is not ConnectionState.DOWN:
-                if resp is None:                        # UP failure case
-                    errcount += 1
-                    if errcount >= errors:
-                        state = ConnectionState.DOWN
-                        logger.warning(f'DOWN {host}')
-                elif state is not ConnectionState.UP:   # found UP
-                    state = ConnectionState.UP
-                    logger.warning(f'UP {host}')
-            elif resp is not None:      #
-                if state is not ConnectionState.UP:     # connection is UP
-                    state = ConnectionState.UP
-                    logger.warning(f'UP {host}')
-                    errcount = 0
-            mark = time.time()
+        count += 1
+        resp = sr1(icmp, timeout=timeleft, verbose=False)
+        logger.debug(f'icmp {host} timeout {timeleft} response: {resp}')
+        if state is not ConnectionState.DOWN:
+            if resp is None:                        # UP failure case
+                errcount += 1
+                if errcount >= errors:
+                    state = ConnectionState.DOWN
+                    logger.warning(f'DOWN {host}')
+            elif state is not ConnectionState.UP:   # found UP
+                state = ConnectionState.UP
+                logger.warning(f'UP {host}')
+        elif resp is not None:      #
+            if state is not ConnectionState.UP:     # connection is UP
+                state = ConnectionState.UP
+                logger.warning(f'UP {host}')
+                errcount = 0
+        mark = time.time()
+        if mark < endat:
+            time.sleep(endat - mark)
     return 0 if state is ConnectionState.UP else 1
 
 
@@ -104,7 +105,7 @@ def run(argv: argparse.Namespace) -> int:
     message = f'Start host={argv.host} interval={argv.interval} maxerr={argv.errors}'
     if argv.times:
         message += " times={argv.times}"
-    logger.debug(message)
+    logger.info(message)
     started = time.time()
     try:
         if os.geteuid() != 0:
@@ -112,7 +113,7 @@ def run(argv: argparse.Namespace) -> int:
         monitor(logger, argv.host, argv.interval, argv.errors, argv.times)
     except (KeyboardInterrupt, PermissionError, ImportError) as exc:
         logger.critical(f'Terminated: {exc}')
-    logger.debug(f'Elapsed: {time.time() - started}')
+    logger.info(f'Elapsed: {time.time() - started}')
     return 0
 
 
