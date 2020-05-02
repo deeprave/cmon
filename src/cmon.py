@@ -11,7 +11,7 @@ import logging
 import time
 from typing import List, Union
 
-__version__ = '1.0.1'
+__version__ = '1.0.2'
 __author__ = 'David Nugent <davidn@uniquode.io>'
 
 
@@ -76,10 +76,15 @@ def monitor(logger: logging.Logger, host: str, interval: float, errors: int, tim
         icmp = IP(dst=host)/ICMP()
         mark = time.time()
         endat = mark + interval
-        timeleft = interval
         count += 1
-        resp = sr1(icmp, timeout=timeleft, verbose=False)
-        logger.debug(f'icmp {host} timeout {timeleft} response: {resp}')
+        try:
+            resp = sr1(icmp, timeout=interval, verbose=False)
+            logger.debug(f'icmp {host}: {"Timeout" if resp is None else "Success"}')
+        except OSError as exc:
+            if exc.errno not in (100,):
+                raise
+            resp = None
+            logger.debug(f'icmp {host} error {exc}: {exc.args}')
         if state is not ConnectionState.DOWN:
             if resp is None:                        # UP failure case
                 errcount += 1

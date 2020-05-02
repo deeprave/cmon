@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='CMon',
-    version='1.0.1',
+    version='1.0.2',
     license='Apache 2.0',
     author='David Nugent',
     author_email='davidn@uniquode.io',
