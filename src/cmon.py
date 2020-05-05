@@ -48,7 +48,7 @@ def parse_args(prog: str, args: List[str],
 
 def setup_logging(logfile: str, verbosity: int) -> logging.Logger:
     logging.getLogger().handlers = []   # reset
-    formatter = logging.Formatter('%(asctime)s %(levelname)9s %(message)s (%(name)s)')
+    formatter = logging.Formatter('%(asctime)s %(message)s (%(name)s)')
     logger = logging.getLogger('cmon')
     # root logger level
     logger.setLevel(logging.WARNING if verbosity == 0 else logging.INFO if verbosity == 1 else logging.DEBUG)
@@ -69,36 +69,46 @@ def monitor(logger: logging.Logger, host: str, interval: float, errors: int, tim
     from scapy.layers.inet import ICMP, IP
     from scapy.sendrecv import sr1
 
+    def diagnostic(sent, rcvd, e):
+        if rcvd is None:
+            logger.debug(f'icmp {host}: timeout')
+        elif e:
+            logger.debug(f'icmp {host} error {e}: {e.args}')
+        elif rcvd.src == sent.dst:
+            logger.debug(f'icmp {host}: success')
+            return ConnectionState.UP
+        else:  # assume response from intermediary
+            logger.debug(f'icmp {host}: not reachable {rcvd.src} type={rcvd.type}')
+        return ConnectionState.DOWN
+
     state = None
-    count = -1
+    count = errors
     errcount = 0
     while not times or count < times:
         icmp = IP(dst=host)/ICMP()
         mark = time.time()
         endat = mark + interval
         count += 1
+        exc = rsp = None
         try:
-            resp = sr1(icmp, timeout=interval, verbose=False)
-            logger.debug(f'icmp {host}: {"Timeout" if resp is None else "Success"}')
-        except OSError as exc:
-            if exc.errno not in (100,):
-                raise
-            resp = None
-            logger.debug(f'icmp {host} error {exc}: {exc.args}')
+            rsp = sr1(icmp, timeout=interval, verbose=False)
+        except OSError as ex:
+            exc = ex
+        newstate = diagnostic(icmp, rsp, exc)
         if state is not ConnectionState.DOWN:
-            if resp is None:                        # UP failure case
+            if newstate is ConnectionState.DOWN:    # UP failure case
                 errcount += 1
                 if errcount >= errors:
-                    state = ConnectionState.DOWN
                     logger.warning(f'DOWN {host}')
+                    state = newstate
             elif state is not ConnectionState.UP:   # found UP
-                state = ConnectionState.UP
+                state = newstate
                 logger.warning(f'UP {host}')
-        elif resp is not None:      #
-            if state is not ConnectionState.UP:     # connection is UP
-                state = ConnectionState.UP
-                logger.warning(f'UP {host}')
+        else:
+            if newstate is ConnectionState.UP:
                 errcount = 0
+                state = newstate
+                logger.warning(f'UP {host}')
         mark = time.time()
         if mark < endat:
             time.sleep(endat - mark)
