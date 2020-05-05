@@ -1,8 +1,10 @@
 from setuptools import setup
 
+from src.cmon import __version__
+
 setup(
     name='CMon',
-    version='1.0.4',
+    version=__version__,
     license='Apache 2.0',
     author='David Nugent',
     author_email='davidn@uniquode.io',
