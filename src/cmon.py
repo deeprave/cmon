@@ -48,7 +48,7 @@ def parse_args(prog: str, args: List[str],
 
 def setup_logging(logfile: str, verbosity: int) -> logging.Logger:
     logging.getLogger().handlers = []   # reset
-    formatter = logging.Formatter('%(asctime)s %(message)s (%(name)s)')
+    formatter = logging.Formatter('%(asctime)s  %(name)s %(message)s')
     logger = logging.getLogger('cmon')
     # root logger level
     logger.setLevel(logging.WARNING if verbosity == 0 else logging.INFO if verbosity == 1 else logging.DEBUG)
@@ -74,11 +74,11 @@ def monitor(logger: logging.Logger, host: str, interval: float, errors: int, tim
             logger.debug(f'icmp {host}: timeout')
         elif e:
             logger.debug(f'icmp {host} error {e}: {e.args}')
-        elif rcvd.src == sent.dst:
+        elif rcvd.src != sent.dst:  # assume response from intermediary
+            logger.debug(f'icmp {host}: not reachable {rcvd.src} type={rcvd.type}')
+        else:
             logger.debug(f'icmp {host}: success')
             return ConnectionState.UP
-        else:  # assume response from intermediary
-            logger.debug(f'icmp {host}: not reachable {rcvd.src} type={rcvd.type}')
         return ConnectionState.DOWN
 
     state = None
