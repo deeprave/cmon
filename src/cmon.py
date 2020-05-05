@@ -11,7 +11,7 @@ import logging
 import time
 from typing import List, Union
 
-__version__ = '1.0.2'
+__version__ = '1.0.3'
 __author__ = 'David Nugent <davidn@uniquode.io>'
 
 
