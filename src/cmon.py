@@ -11,7 +11,7 @@ import logging
 import time
 from typing import List, Union
 
-__version__ = '1.0.3'
+__version__ = '1.0.4'
 __author__ = 'David Nugent <davidn@uniquode.io>'
 
 
@@ -117,7 +117,7 @@ def monitor(logger: logging.Logger, host: str, interval: float, errors: int, tim
 
 def run(argv: argparse.Namespace) -> int:
     logger = setup_logging(argv.logfile, argv.verbose)
-    message = f'Start host={argv.host} interval={argv.interval} maxerr={argv.errors}'
+    message = f'Start host={argv.host} interval={argv.interval} maxerr={argv.errors}; v{__version__}'
     if argv.times:
         message += " times={argv.times}"
     logger.info(message)
