@@ -9,9 +9,10 @@ import os
 import argparse
 import logging
 import time
+from datetime import timedelta
 from typing import List, Union
 
-__version__ = '1.0.5'
+__version__ = '1.1.0'
 __author__ = 'David Nugent <davidn@uniquode.io>'
 
 
@@ -36,13 +37,15 @@ def parse_args(prog: str, args: List[str],
                         help='number of errors (lost packets) before connection is considered dead')
     parser.add_argument('-t', '--times', default=None,
                         help='maximum number of times to try (default not set = forever)')
-    parser.add_argument('-l', '--logfile', action='store',
+    parser.add_argument('-l', '--logfile', action='store', default=None,
                         help='create or append log to a file (default none = no log file)')
+    parser.add_argument('-c', '--csv', action='store', default=None,
+                        help='create or append RTT data to CSV file (default none = no RTT data logged)')
     parser.add_argument('-v', '--verbose', action='count', default=0,
                         help='increase logging verbosity')
     parser.add_argument('-V', '--version', action='version', version=f'{prog} v{__version__} by {__author__}',
                         help='print version and exit')
-    namespace = namespace or argparse.Namespace(prog=prog, parser=parser)
+    namespace = namespace or argparse.Namespace(prog=prog, parser=parser, rdd=None)
     return parser.parse_args(args, namespace)
 
 
@@ -65,69 +68,149 @@ def setup_logging(logfile: str, verbosity: int) -> logging.Logger:
     return logger
 
 
-def monitor(logger: logging.Logger, host: str, interval: float, errors: int, times: int):
+class CSVLog:
+    HEADERS = 'timestamp,host,state,status,rtt\n'
+
+    def __init__(self, filename):
+        self._filename = filename
+        self._fd = None
+
+    @property
+    def filename(self):
+        return self._filename
+
+    def open(self):
+        if self._filename:
+            try:
+                self._fd = open(self._filename, mode='a+', encoding='utf-8')
+                # write headers if beginning of file
+                if self._fd.seek(os.SEEK_CUR, 0) == 0:
+                    self._fd.write(self.HEADERS)
+            except EnvironmentError:
+                raise
+            except (TypeError, AttributeError):
+                pass
+            return True
+        return False
+
+    def close(self):
+        if self._fd is not None:
+            self._fd.close()
+
+    @staticmethod
+    def esc(string):
+        if not string:
+            string = ''
+        elif '"' in string:
+            string = '"' + ''.join([f"\\{x}" if x == '"' else x for x in string]) + '"'
+        return string
+
+    def add(self, timestamp: float, host: str, state: str, status: str, rtt: float):
+        if self._fd is not None:
+            self._fd.write(f"{timestamp},{self.esc(host)},{state},{self.esc(status)},{0.0 if not rtt else rtt}\n")
+            self._fd.flush()
+
+
+def monitor(logger: logging.Logger, csv: CSVLog, host: str, interval: float, errors: int, times: int):
     from scapy.layers.inet import ICMP, IP
     from scapy.sendrecv import sr1
 
-    def diagnostic(sent, rcvd, e):
-        if rcvd is None:
-            logger.debug(f'icmp {host}: timeout')
-        elif e:
-            logger.debug(f'icmp {host} error {e}: {e.args}')
-        elif rcvd.src != sent.dst:  # assume response from intermediary
-            logger.debug(f'icmp {host}: not reachable {rcvd.src} type={rcvd.type}')
-        else:
-            logger.debug(f'icmp {host}: success')
-            return ConnectionState.UP
-        return ConnectionState.DOWN
+    currentstate = None
+    uptime = downtime = None
+    pingcount = errcount = 0
 
-    state = None
-    count = errors
-    errcount = 0
-    while not times or count < times:
+    def in_milliseconds(value: float):
+        return int(value * 1000000) / 1000
+
+    def getstate(c: ConnectionState) -> str:
+        return 'U' if c == ConnectionState.UP else 'D' if c == ConnectionState.DOWN else 'U'
+
+    def diagnostic(sent, rcvd, e):
+        new_state = ConnectionState.DOWN
+        rtt = None
+        if rcvd is None:
+            result = 'timeout'
+        elif e:
+            result = f'error {e}: {e.args}'
+        elif rcvd.src != sent.dst:  # assume response from intermediary
+            result = f'not reachable {rcvd.src} type={rcvd.type}'
+        else:
+            result = 'success'
+            new_state = ConnectionState.UP
+            rtt = in_milliseconds(rcvd.time - sent.sent_time)
+        csv.add(sent.sent_time, host, getstate(new_state), result, rtt)
+        logger.debug(f'{host} icmp {result}{" " + str(rtt) + " ms" if rtt else ""}')
+        return new_state
+
+    def lost(up_time):
+        nonlocal downtime
+        up_for = ""
+        if up_time is not None and downtime is not None:
+            duration = downtime - up_time
+            up_for = f" uptime {timedelta(seconds=duration)} ms"
+        logger.warning(f'{host} DOWN{up_for}')
+
+    def recovered(current):
+        nonlocal downtime, uptime, errcount
+        uptime = current
+        down_for = ""
+        if downtime is not None:
+            duration = current - downtime
+            down_for = f" dowmtime {timedelta(seconds=duration)}"
+        logger.warning(f'{host} UP{down_for}')
+        errcount = 0
+        downtime = None
+
+    if os.geteuid() != 0:
+        raise PermissionError('this script requires elevated (root) priviledges')
+
+    while not times or pingcount < times:
         icmp = IP(dst=host)/ICMP()
-        mark = time.time()
-        endat = mark + interval
-        count += 1
+        pingcount += 1
+        endat = time.time() + interval
         exc = rsp = None
+        starttime = time.time()
         try:
             rsp = sr1(icmp, timeout=interval, verbose=False)
         except OSError as ex:
             exc = ex
         newstate = diagnostic(icmp, rsp, exc)
-        if state is not ConnectionState.DOWN:
+        if currentstate is not ConnectionState.DOWN:
             if newstate is ConnectionState.DOWN:    # UP failure case
+                if downtime is None:
+                    downtime = starttime
                 errcount += 1
                 if errcount >= errors:
-                    logger.warning(f'DOWN {host}')
-                    state = newstate
-            elif state is not ConnectionState.UP:   # found UP
-                state = newstate
-                logger.warning(f'UP {host}')
-        else:
-            if newstate is ConnectionState.UP:
-                errcount = 0
-                state = newstate
-                logger.warning(f'UP {host}')
-        mark = time.time()
-        if mark < endat:
-            time.sleep(endat - mark)
-    return 0 if state is ConnectionState.UP else 1
+                    lost(uptime)
+                    currentstate = newstate
+            elif currentstate is not ConnectionState.UP:   # found UP
+                recovered(starttime)
+                currentstate = newstate
+        elif newstate is ConnectionState.UP:
+            recovered(starttime)
+            currentstate = newstate
+        if starttime < endat:
+            time.sleep(endat - starttime)
+    return 0 if currentstate is ConnectionState.UP else 1
 
 
 def run(argv: argparse.Namespace) -> int:
     logger = setup_logging(argv.logfile, argv.verbose)
-    message = f'Start host={argv.host} interval={argv.interval} maxerr={argv.errors}; v{__version__}'
+    csv = CSVLog(argv.csv)
+    message = f'Start host={argv.host} interval={argv.interval} maxerr={argv.errors}'
     if argv.times:
-        message += " times={argv.times}"
+        message += f" times={argv.times}"
+    if csv:
+        message += f" csv={csv.filename}"
+    message += f"; v{__version__}"
     logger.info(message)
     started = time.time()
     try:
-        if os.geteuid() != 0:
-            raise PermissionError('this script requires elevated (root) priviledges')
-        monitor(logger, argv.host, argv.interval, argv.errors, argv.times)
+        csv.open()
+        monitor(logger, csv, argv.host, argv.interval, argv.errors, argv.times)
     except (KeyboardInterrupt, PermissionError, ImportError) as exc:
-        logger.critical(f'Terminated: {exc}')
+        logger.critical(f'Terminated: {exc.__class__.__name__}')
+    csv.close()
     logger.info(f'Elapsed: {time.time() - started}')
     return 0
 
