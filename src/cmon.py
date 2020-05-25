@@ -147,7 +147,7 @@ def monitor(logger: logging.Logger, csv: CSVLog, host: str, interval: float, err
         up_for = ""
         if up_time is not None and downtime is not None:
             duration = downtime - up_time
-            up_for = f" uptime {timedelta(seconds=duration)} ms"
+            up_for = f" uptime {timedelta(seconds=duration)}"
         logger.warning(f'{host} DOWN{up_for}')
 
     def recovered(current):
