@@ -12,7 +12,7 @@ import time
 from datetime import timedelta
 from typing import List, Union
 
-__version__ = '1.1.0'
+__version__ = '1.1.1'
 __author__ = 'David Nugent <davidn@uniquode.io>'
 
 
